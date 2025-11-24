@@ -1,2 +1,5 @@
 cdk synth -c account=<ACCOUNT_ID> and -c region=<REGION>
 cdk deploy -c account=<ACCOUNT_ID> and -c region=<REGION>
+
+InfraStack.ApiUrl = https://qzij8gdfwl.execute-api.ap-southeast-2.amazonaws.com/prod/
+InfraStack.Endpoint8024A810 = https://qzij8gdfwl.execute-api.ap-southeast-2.amazonaws.com/prod/
