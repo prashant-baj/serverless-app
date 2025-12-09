@@ -1,0 +1,4 @@
+boto3
+strands-agents
+strands-agents-tools
+# Dependencies for AWS Textract and AWS Bedrock are included in boto3
