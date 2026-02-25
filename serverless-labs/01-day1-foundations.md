@@ -372,6 +372,24 @@ def lambda_handler(event, context):
 ```
 
 ---
+```bash
+# In CloudShell
+aws lambda add-permission \
+  --function-name OrderNotifier \
+  --statement-id EventBridgeInvoke \
+  --action lambda:InvokeFunction \
+  --principal events.amazonaws.com \
+  --source-arn arn:aws:events:us-east-1:975454609718:rule/ecommerce-events/OrderPlacedRule
+
+
+
+aws events put-targets \
+  --event-bus-name ecommerce-events \
+  --rule OrderPlacedRule \
+  --targets "Id=OrderNotifierTarget,Arn=arn:aws:lambda:us-east-1:975454609718:function:OrderNotifier"
+
+```
+---
 
 ### ✅ Verify — Pattern 3
 

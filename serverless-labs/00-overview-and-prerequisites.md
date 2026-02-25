@@ -216,6 +216,21 @@ for policy in \
     --policy-arn "arn:aws:iam::aws:policy/${policy}" 2>/dev/null || true
 done
 
+# grant permission for putting events to EventBridge
+aws iam put-role-policy \
+  --role-name LambdaLabRole \
+  --policy-name EventBridgePutEvents \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Effect": "Allow",
+      "Action": "events:PutEvents",
+      "Resource": "*"
+    }]
+  }'
+
+
+
 echo "LambdaLabRole created successfully"
 ```
 
