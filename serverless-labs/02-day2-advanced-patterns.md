@@ -7,17 +7,19 @@
 
 ## Day 2 onwards at a Glance
 
-| # | Pattern | Core Services |
-|---|---------|--------------|
-| 7 | Stream Processing | Kinesis · Lambda · DynamoDB |
-| 8 | Orchestration Workflow | Step Functions · Lambda |
-| 9 | Choreography with EventBridge | EventBridge · Lambda |
-| 10 | Scheduled Automation | EventBridge Scheduler · Lambda |
-| 11 | Serverless RAG | Bedrock · DynamoDB · Lambda |
-| 12 | Agentic AI | Bedrock Tool Use · Lambda |
-| 13 | Document Intelligence | Textract · S3 · Lambda |
-| 14 | Serverless ETL & Data Lake | S3 · Lambda · Athena |
-| 15 | Event Sourcing & CQRS | DynamoDB Streams · Lambda |
+| # | Pattern | Core Services | Lab Type |
+|---|---------|--------------|--------------|
+| 7 | Stream Processing | Kinesis · Lambda · DynamoDB | Workshop |
+| 8 | Orchestration Workflow | Step Functions · Lambda | Lab |
+| 9 | Choreography with EventBridge | EventBridge · Lambda | Homework |
+| 10 | Scheduled Automation | EventBridge Scheduler · Lambda | Homework |
+| 11 | Serverless RAG | Bedrock · DynamoDB · Lambda | Homework |
+| 12 | Agentic AI | Bedrock Tool Use · Lambda | Workshop |
+| 13 | Document Intelligence | Textract · S3 · Lambda | Workshop |
+| 14 | Serverless ETL & Data Lake | S3 · Lambda · Athena | Homework |
+| 15 | Event Sourcing & CQRS | DynamoDB Streams · Lambda | Homework |
+
+---
 
 ---
 
