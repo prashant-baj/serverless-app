@@ -33,7 +33,7 @@ By the end of this workshop you will be able to:
 
 ## Workshop Structure
 
-| | Day 1 | Day 2 |
+| | Day 1 | Day 2++ |
 |---|---|---|
 | **Theme** | Serverless Foundations | Advanced Patterns |
 | **Patterns** | 1 – 6 | 7 – 15 |

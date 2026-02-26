@@ -5,7 +5,7 @@
 
 ---
 
-## Day 2 at a Glance
+## Day 2 onwards at a Glance
 
 | # | Pattern | Core Services |
 |---|---------|--------------|
