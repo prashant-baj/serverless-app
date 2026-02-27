@@ -83,26 +83,26 @@ jobs:
   # full picture is available before deciding to block the PR.
   # ─────────────────────────────────────────────────────────────────────────────
   security:
-  name: Security Scan (Demo Safe)
-  runs-on: ubuntu-latest
+    name: Security Scan (Demo Safe)
+    runs-on: ubuntu-latest
 
-  steps:
-    - uses: actions/checkout@v4
+    steps:
+      - uses: actions/checkout@v4
 
-    - uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-    - run: pip install bandit
+      - run: pip install bandit
 
-    - name: Run Bandit scan
-      run: bandit -r . -f sarif -o bandit.sarif --exit-zero
+      - name: Run Bandit scan
+        run: bandit -r . -f sarif -o bandit.sarif --exit-zero
 
-    - name: Upload SARIF
-      uses: github/codeql-action/upload-sarif@v3
-      continue-on-error: true
-      with:
-        sarif_file: bandit.sarif
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: bandit.sarif
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 4 — SYNTH (PR only — validates CDK templates without deploying)
