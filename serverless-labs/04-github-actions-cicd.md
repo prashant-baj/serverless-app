@@ -826,6 +826,30 @@ If the job is missing this block, the `GITHUB_TOKEN` defaults to read-only and c
 
 ---
 
+### `Security Scan` job — `Error: Path does not exist: bandit.sarif` (or checkov / trivy)
+
+**Cause:** A scanner step errored before it could write its SARIF output file. Because `github/codeql-action/upload-sarif` then has no file to read, it fails with "Path does not exist" even though `if: always()` is set.
+
+Common reasons a scanner exits without writing a file:
+- The tool crashed or received a signal before opening the output file
+- The network was unavailable when the action container started (Checkov, Trivy)
+- A flag or parameter name changed in a newer version of the action
+
+**How the pipeline prevents this:** The `Initialise SARIF placeholders` step runs immediately after installing the scanners and writes minimal valid empty SARIF files for all three tools:
+```yaml
+- name: Initialise SARIF placeholders
+  run: |
+    EMPTY='{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}'
+    echo "$EMPTY" > bandit.sarif
+    echo "$EMPTY" > checkov.sarif
+    echo "$EMPTY" > trivy.sarif
+```
+Each scanner overwrites its placeholder on success. If a scanner fails mid-run, the placeholder (not a partial/corrupt file) is uploaded.
+
+**If you still see this error** despite the placeholder step, check which step in the job failed *before* the placeholder step ran. Look at the `Initialise SARIF placeholders` step in the Actions log — if it shows as skipped or failed, a prior step (checkout, Python setup, pip install) caused the job to exit before reaching it.
+
+---
+
 ### `Security Scan` job — SARIF upload fails with "Advanced Security must be enabled"
 
 **Cause:** GitHub Advanced Security is not enabled on the repository. Code Scanning (SARIF upload) requires Advanced Security, which is free for public repositories but requires a **GitHub Enterprise** or **GitHub Team** plan for private repositories.

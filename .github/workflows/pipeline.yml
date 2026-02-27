@@ -100,6 +100,18 @@ jobs:
       - name: Install security scanners
         run: pip install bandit pip-audit
 
+      # Pre-create valid empty SARIF placeholders for all three scanners.
+      # Each scanner overwrites its placeholder on success.  If a scanner
+      # errors before writing its output file (network failure, bad flag, etc.)
+      # the placeholder ensures the upload step always has a file to read and
+      # never fails with "Path does not exist".
+      - name: Initialise SARIF placeholders
+        run: |
+          EMPTY='{"version":"2.1.0","$schema":"https://json.schemastore.org/sarif-2.1.0.json","runs":[]}'
+          echo "$EMPTY" > bandit.sarif
+          echo "$EMPTY" > checkov.sarif
+          echo "$EMPTY" > trivy.sarif
+
       # ── Bandit — Python SAST ─────────────────────────────────────────────────
       - name: Bandit — Python static security analysis
         # Scans app/ (Lambda handler) and infra/infra/ (CDK stack definitions).
