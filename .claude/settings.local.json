@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /c/StackRoute/mindsprint-content/serverless-app/serverless-app log --oneline -15)",
+      "Bash(wc -l /c/StackRoute/mindsprint-content/serverless-app/serverless-app/serverless-labs/*.md)"
+    ]
+  }
+}
