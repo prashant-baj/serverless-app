@@ -1,89 +1,27 @@
-name: CI/CD Pipeline
+name: Ultimate DevSecOps Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
 
-# Required for GitHub OIDC token (keyless AWS auth) and GitHub Security tab
 permissions:
-  id-token: write       # OIDC → AWS credentials (synth + deploy jobs)
-  contents: read        # checkout
-  security-events: write # upload SARIF results to GitHub Security tab
+  id-token: write
+  contents: read
+  security-events: write
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
   PYTHON_VERSION: "3.12"
 
 jobs:
-  # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 1 — TEST (runs on every PR and push to main)
-  # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# JOB 1 — TEST
+# ─────────────────────────────────────────────────────────────
   test:
     name: Unit Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: |
-            infra/requirements.txt
-            infra/requirements-dev.txt
-
-      - name: Install CDK dependencies
-        working-directory: infra
-        run: pip install -r requirements.txt -r requirements-dev.txt
-
-      - name: Run unit tests
-        working-directory: infra
-        run: pytest tests/ -v
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 2 — COPILOT CODE REVIEW (PR only, runs in parallel with test)
-  #
-  # Posts an automated AI-powered review on the pull request.
-  # Requires: GitHub Copilot subscription with code review enabled on the repo.
-  # Enable in: Repository Settings → Copilot → Code review
-  # ─────────────────────────────────────────────────────────────────────────────
-  code-review:
-    name: Copilot Code Review
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    permissions:
-      contents: read
-      pull-requests: write  # allows Copilot to post review comments on the PR
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: GitHub Copilot Code Review
-        uses: github/copilot-code-review@v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 3 — SECURITY SCAN (runs on every PR and push to main, parallel with test)
-  #
-  # Four layers of scanning:
-  #   bandit   — Python SAST (static application security testing)
-  #   pip-audit — dependency CVE check against PyPI Advisory Database
-  #   checkov  — IaC misconfiguration scan (Dockerfile)
-  #   trivy    — filesystem + dependency vulnerability scan
-  #
-  # All findings are uploaded to the GitHub Security tab (Code Scanning Alerts)
-  # as SARIF. Steps use continue-on-error so all scanners always run and the
-  # full picture is available before deciding to block the PR.
-  # ─────────────────────────────────────────────────────────────────────────────
-  security:
-    name: Security Scan (Demo Safe)
     runs-on: ubuntu-latest
 
     steps:
@@ -91,22 +29,105 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            infra/requirements.txt
+            infra/requirements-dev.txt
 
-      - run: pip install bandit
+      - name: Install dependencies
+        working-directory: infra
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run Bandit scan
+      - name: Run tests
+        working-directory: infra
+        run: pytest tests/ -v
+
+
+# ─────────────────────────────────────────────────────────────
+# JOB 2 — SECURITY (ULTIMATE)
+# ─────────────────────────────────────────────────────────────
+  security:
+    name: DevSecOps Security Scans
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------- GitHub Native SAST ----------
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+
+      - name: CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+
+      # ---------- Python SAST ----------
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bandit + SARIF formatter
+        run: pip install bandit bandit-sarif-formatter
+
+      - name: Bandit scan
         run: bandit -r . -f sarif -o bandit.sarif --exit-zero
 
-      - name: Upload SARIF
+      - name: Upload Bandit results
         uses: github/codeql-action/upload-sarif@v3
         continue-on-error: true
         with:
           sarif_file: bandit.sarif
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 4 — SYNTH (PR only — validates CDK templates without deploying)
-  # ─────────────────────────────────────────────────────────────────────────────
+
+      # ---------- Dependency CVE Scan ----------
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Dependency vulnerability scan
+        run: pip-audit -r infra/requirements.txt || true
+
+
+      # ---------- IaC Security ----------
+      - name: Checkov IaC scan
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: cloudformation,dockerfile
+          output_format: sarif
+          output_file_path: checkov.sarif
+          soft_fail: true
+
+      - name: Upload Checkov results
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: checkov.sarif
+
+
+      # ---------- Filesystem / Container ----------
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: trivy.sarif
+
+
+# ─────────────────────────────────────────────────────────────
+# JOB 3 — SYNTH (PR VALIDATION)
+# ─────────────────────────────────────────────────────────────
   synth:
     name: CDK Synth (PR validation)
     runs-on: ubuntu-latest
@@ -114,29 +135,23 @@ jobs:
     if: github.event_name == 'pull_request'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: infra/requirements.txt
 
       - name: Install CDK dependencies
         working-directory: infra
         run: pip install -r requirements.txt
 
-      - name: Set up Node.js (for AWS CDK CLI)
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install AWS CDK CLI
-        run: npm install -g aws-cdk
+      - run: npm install -g aws-cdk
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
@@ -144,16 +159,12 @@ jobs:
 
       - name: CDK Synth
         working-directory: infra
-        env:
-          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        # Synthesizes CloudFormation templates and validates the Docker image build
-        # without actually deploying anything to AWS.
         run: cdk synth
 
-  # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 5 — DEPLOY (push to main only — builds Docker, pushes to ECR, deploys)
-  # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────
+# JOB 4 — DEPLOY (MAIN ONLY)
+# ─────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to Dev
     runs-on: ubuntu-latest
@@ -161,53 +172,30 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: infra/requirements.txt
 
       - name: Install CDK dependencies
         working-directory: infra
         run: pip install -r requirements.txt
 
-      - name: Set up Node.js (for AWS CDK CLI)
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install AWS CDK CLI
-        run: npm install -g aws-cdk
+      - run: npm install -g aws-cdk
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
 
       - name: CDK Deploy
         working-directory: infra
-        env:
-          CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-          CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        # Builds the Docker image, pushes it to ECR, and deploys the
-        # CloudFormation stack (AIDocProcessorStack) — all in one command.
-        run: |
-          cdk deploy --all \
-            --require-approval never \
-            --outputs-file ../cdk-outputs.json
-
-      - name: Show stack outputs
-        if: always()
-        run: |
-          if [ -f cdk-outputs.json ]; then
-            echo "### Stack Outputs" >> $GITHUB_STEP_SUMMARY
-            cat cdk-outputs.json >> $GITHUB_STEP_SUMMARY
-          fi
+        run: cdk deploy --all --require-approval never
