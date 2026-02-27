@@ -11,6 +11,7 @@
 - [How the Pipeline Works](#how-the-pipeline-works)
 - [Prerequisites](#prerequisites)
 - [Part 1 — One-Time AWS Setup](#part-1--one-time-aws-setup)
+  - [Step 0 — Configure Your Lab Account for CDK Bootstrap](#step-0--configure-your-lab-account-for-cdk-bootstrap)
 - [Part 2 — CDK Bootstrap](#part-2--cdk-bootstrap)
 - [Part 3 — GitHub Repository Setup](#part-3--github-repository-setup)
 - [Part 4 — Understanding the Workflow File](#part-4--understanding-the-workflow-file)
@@ -94,6 +95,104 @@ No AWS access keys are stored anywhere. GitHub's OIDC provider issues a short-li
 ## Part 1 — One-Time AWS Setup
 
 These steps are performed **once per AWS account**. They create the trust relationship that allows GitHub Actions to authenticate to AWS without storing any credentials.
+
+### Step 0 — Configure Your Lab Account for CDK Bootstrap
+
+Before creating any IAM resources, confirm your local AWS CLI is authenticated to the correct lab account and that the account has no service restrictions that would block CDK bootstrap. CDK bootstrap creates an S3 bucket, an ECR repository, and several IAM roles — all of which require the permissions below.
+
+#### Configure AWS CLI credentials
+
+**Option A — Named profile (recommended for lab accounts):**
+
+```bash
+aws configure --profile lab
+# AWS Access Key ID:     <paste your lab account key>
+# AWS Secret Access Key: <paste your lab account secret>
+# Default region name:   ap-southeast-2
+# Default output format: json
+
+# Verify the profile works
+aws sts get-caller-identity --profile lab
+```
+
+Set the profile for the rest of this session so you do not need to pass `--profile` on every command:
+
+```bash
+export AWS_PROFILE=lab
+```
+
+**Option B — Environment variables (common in temporary/session-based lab accounts):**
+
+```bash
+export AWS_ACCESS_KEY_ID="ASIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_SESSION_TOKEN="..."          # required if using temporary credentials
+export AWS_DEFAULT_REGION="ap-southeast-2"
+
+# Verify
+aws sts get-caller-identity
+```
+
+> **Lab account tip:** Many training environments (AWS Academy, event-based sandbox accounts) issue temporary credentials that include a `SessionToken`. If `aws sts get-caller-identity` returns `InvalidClientTokenId`, your session has expired — refresh the credentials from the lab portal and re-export.
+
+#### Confirm the account ID and region
+
+```bash
+# Print account ID and region — you will use these values throughout this lab
+echo "Account : $(aws sts get-caller-identity --query Account --output text)"
+echo "Region  : ${AWS_DEFAULT_REGION:-$(aws configure get region)}"
+```
+
+Note both values. They go into the GitHub Secrets in Part 3.
+
+#### Verify IAM permissions for CDK bootstrap
+
+CDK bootstrap requires the ability to create S3 buckets, ECR repositories, IAM roles, and SSM parameters. Run these checks before proceeding:
+
+```bash
+# Check S3 access (CDK assets bucket)
+aws s3 ls > /dev/null 2>&1 && echo "✅ S3 access OK" || echo "❌ S3 access denied"
+
+# Check IAM access (CDK roles)
+aws iam list-roles --max-items 1 > /dev/null 2>&1 && echo "✅ IAM access OK" || echo "❌ IAM access denied"
+
+# Check ECR access (CDK container assets)
+aws ecr describe-repositories > /dev/null 2>&1 && echo "✅ ECR access OK" || echo "❌ ECR access denied"
+
+# Check CloudFormation access (CDKToolkit stack)
+aws cloudformation list-stacks > /dev/null 2>&1 && echo "✅ CloudFormation access OK" || echo "❌ CloudFormation access denied"
+
+# Check SSM access (CDK feature flags)
+aws ssm get-parameters-by-path --path /cdk-bootstrap > /dev/null 2>&1 && echo "✅ SSM access OK" || echo "❌ SSM access denied"
+```
+
+All five should return `✅`. If any return `❌`, your lab account does not have the required permissions — contact your AWS administrator or trainer before continuing.
+
+#### Check for S3 Block Public Access at the account level
+
+CDK's assets S3 bucket is private, but account-level Block Public Access settings can still interfere with bucket creation in some restricted environments. Confirm the setting:
+
+```bash
+aws s3control get-public-access-block \
+  --account-id $(aws sts get-caller-identity --query Account --output text)
+```
+
+All four values (`BlockPublicAcls`, `IgnorePublicAcls`, `BlockPublicPolicy`, `RestrictPublicBuckets`) can remain `true` — CDK does not need public access. This check is only to confirm the command runs without an access-denied error.
+
+#### Install CDK CLI locally (if not already installed)
+
+```bash
+# Requires Node.js v18+
+node --version        # confirm Node is installed
+
+# Install CDK globally
+npm install -g aws-cdk
+
+# Verify
+cdk --version         # expected: 2.x.x (build ...)
+```
+
+---
 
 ### Step 1 — Add the GitHub OIDC Identity Provider
 
@@ -229,7 +328,7 @@ export AWS_REGION="ap-southeast-2"   # Change if you use a different region
 
 # Bootstrap CDK
 cd infra
-cdk bootstrap aws://${AWS_ACCOUNT_ID}/${AWS_REGION}
+cdk bootstrap aws://${AWS_ACCOUNT_ID}/${AWS_REGION} --profile lab
 ```
 
 Expected output ends with:
