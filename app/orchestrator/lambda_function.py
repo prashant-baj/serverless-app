@@ -112,6 +112,7 @@ def textract_extraction_agent(
 
 
 def lambda_handler(event, context):
+    print("Starting Lambda handler execution.")
     """
     This Lambda function acts as an orchestrator for a document processing pipeline.
     It can be triggered by an S3 object put event or invoked via HTTP.
