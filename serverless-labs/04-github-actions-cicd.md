@@ -15,6 +15,8 @@
 - [Part 2 — CDK Bootstrap](#part-2--cdk-bootstrap)
 - [Part 3 — GitHub Repository Setup](#part-3--github-repository-setup)
 - [Part 4 — Understanding the Workflow File](#part-4--understanding-the-workflow-file)
+  - [Job 2 — Copilot Code Review](#job-2--code-review-pr-only-runs-in-parallel-with-test)
+  - [Job 3 — Security Scan](#job-3--security-always-runs-in-parallel-with-test)
 - [Part 5 — Test the Pipeline End-to-End](#part-5--test-the-pipeline-end-to-end)
 - [Verify & Validate](#verify--validate)
 - [Troubleshooting](#troubleshooting)
@@ -28,34 +30,60 @@ Manual `cdk deploy` works on a developer's machine but breaks down on a team —
 By the end you will have:
 
 - Pull requests automatically **tested** (pytest) and **synthesised** (CDK template validation) before merge
+- Pull requests automatically **reviewed** by GitHub Copilot AI with inline code comments
+- Every run **security-scanned** across four layers: Python SAST, dependency CVEs, IaC misconfigurations, and filesystem vulnerabilities
 - Merges to `main` automatically **deployed** to the `dev` AWS environment
 - AWS credentials handled via **OIDC (keyless auth)** — no IAM access keys stored anywhere
+- All security findings surfaced in the **GitHub Security tab** (Code Scanning Alerts)
 
 ---
 
 ## How the Pipeline Works
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  PULL REQUEST                                                       │
-│                                                                     │
-│   push  ──►  test job          ──►  synth job                       │
-│             (pytest)                (cdk synth — validates          │
-│                                      CloudFormation templates)      │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  PULL REQUEST                                                            │
+│                                                                          │
+│         ┌─► test job ─────────────────────────────────► synth job        │
+│         │   (pytest)                                    (cdk synth)      │
+│  push ──┤                                                                │
+│         ├─► code-review job  (runs in parallel)                          │
+│         │   (GitHub Copilot AI review → PR comments)                     │
+│         │                                                                │
+│         └─► security job     (runs in parallel)                          │
+│             ├─ bandit   (Python SAST)                                    │
+│             ├─ pip-audit (dependency CVEs)                               │
+│             ├─ checkov  (Dockerfile misconfigurations)                   │
+│             └─ trivy    (filesystem vulnerabilities)                     │
+│                 └──► GitHub Security tab (Code Scanning Alerts)          │
+└──────────────────────────────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────────────────────────┐
-│  PUSH TO MAIN                                                       │
-│                                                                     │
-│   push  ──►  test job  ──►  deploy job                              │
-│             (pytest)        (cdk deploy --all)                      │
-│                              │                                      │
-│                              ├─ Builds Docker image                 │
-│                              ├─ Pushes to ECR                       │
-│                              └─ Deploys CloudFormation stack        │
-│                                 AIDocProcessorStack                 │
-└─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  PUSH TO MAIN                                                            │
+│                                                                          │
+│         ┌─► test job ─────────────────────────────────► deploy job       │
+│         │   (pytest)                                    (cdk deploy)     │
+│  push ──┤                                               ├─ Docker build  │
+│         │                                               ├─ ECR push      │
+│         └─► security job     (runs in parallel)         └─ CloudFormation│
+│             ├─ bandit                                                    │
+│             ├─ pip-audit                                                 │
+│             ├─ checkov                                                   │
+│             └─ trivy                                                     │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+**Job dependency summary:**
+
+| Job | Trigger | Depends on | Blocks |
+|-----|---------|-----------|--------|
+| `test` | PR + push | — | `synth`, `deploy` |
+| `code-review` | PR only | — | nothing |
+| `security` | PR + push | — | `synth`, `deploy` |
+| `synth` | PR only | `test` + `security` | — |
+| `deploy` | push to main | `test` + `security` | — |
+
+Both `test` **and** `security` must pass before `synth` or `deploy` can start.
 
 **Authentication flow:**
 
@@ -84,9 +112,12 @@ No AWS access keys are stored anywhere. GitHub's OIDC provider issues a short-li
 |-------------|---------|
 | AWS Account | With permissions to create IAM roles, ECR, Lambda, S3, API Gateway, CloudFormation |
 | GitHub Repository | The serverless-app project pushed to a GitHub repo |
+| GitHub Copilot | Individual, Business, or Enterprise subscription with **code review** enabled (for the `code-review` job) |
 | AWS CLI | Installed and configured locally (for the one-time bootstrap step) |
 | Node.js | v18 or later (for CDK CLI) |
 | Python | 3.12 (matches the Lambda runtime) |
+
+> **No Copilot subscription?** The `code-review` job will be skipped or fail gracefully. All other jobs (test, security, synth, deploy) are unaffected — they have no dependency on `code-review`.
 
 > **Confirm your repo name before starting.** You will need the exact `owner/repo-name` string (e.g. `acme-org/serverless-app`) in Step 3 of Part 1.
 
@@ -413,11 +444,12 @@ The workflow runs on two events:
 
 ```yaml
 permissions:
-  id-token: write   # Allows GitHub to mint an OIDC token for this run
-  contents: read    # Allows checkout of the repository
+  id-token: write        # GitHub mints OIDC token → AWS STS (synth + deploy)
+  contents: read         # checkout
+  security-events: write # upload SARIF files to GitHub Security tab (security job)
 ```
 
-`id-token: write` is the critical line. Without it, GitHub will not issue the OIDC JWT that AWS needs to validate the role assumption.
+The third line is new. `security-events: write` lets the security job post SARIF results to **Security → Code Scanning Alerts** in the repository. The `code-review` job overrides this at job level and adds `pull-requests: write` instead (it needs to post review comments, not OIDC tokens).
 
 ### Job 1 — `test` (always runs)
 
@@ -438,40 +470,136 @@ test:
 
 Runs `pytest` against `infra/tests/`. The pip cache is keyed on `requirements.txt` — unchanged dependencies are restored from cache, making subsequent runs faster.
 
-### Job 2 — `synth` (PR only)
+### Job 2 — `code-review` (PR only, runs in parallel with `test`)
+
+```yaml
+code-review:
+  if: github.event_name == 'pull_request'
+  permissions:
+    contents: read
+    pull-requests: write  # post review comments on the PR
+  steps:
+    - uses: actions/checkout@v4
+    - uses: github/copilot-code-review@v1
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+GitHub Copilot reads the diff of the pull request and posts AI-generated inline review comments — identifying potential bugs, security concerns, and style issues — directly on the PR, just like a human reviewer would.
+
+**Before this job will work**, Copilot code review must be enabled for the repository:
+
+1. Go to **Settings → Copilot → Code review** (repository settings)
+2. Toggle **Enable automatic code review** → On
+3. Optionally configure which file paths to include/exclude
+
+> `pull-requests: write` is a job-level override. It replaces the workflow-level `id-token: write` for this job — Copilot review does not need AWS credentials.
+
+### Job 3 — `security` (always runs, in parallel with `test`)
+
+Four scanners run sequentially within the job. All upload SARIF to the GitHub Security tab. `continue-on-error: true` on each scanner ensures subsequent scanners always run even if one finds issues.
+
+#### Layer 1 — Bandit (Python SAST)
+
+```yaml
+- name: Bandit — Python static security analysis
+  run: |
+    bandit -r app/ infra/infra/ \
+      -f sarif -o bandit.sarif --exit-zero
+  continue-on-error: true
+
+- name: Upload Bandit SARIF to GitHub Security
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: bandit.sarif
+    category: bandit
+```
+
+Bandit scans Python source files for common security issues: hardcoded credentials, SQL injection patterns, unsafe `subprocess` usage, insecure hash functions, etc. `--exit-zero` keeps the step green so subsequent scanners always run; severity is visible in the Security tab.
+
+**Scanned paths:** `app/` (Lambda handler) and `infra/infra/` (CDK stack).
+
+#### Layer 2 — pip-audit (Dependency CVEs)
+
+```yaml
+- name: pip-audit — dependency vulnerability scan
+  run: |
+    pip-audit \
+      -r app/orchestrator/requirements.txt \
+      -r infra/requirements.txt
+  continue-on-error: true
+```
+
+`pip-audit` checks every pinned package in both `requirements.txt` files against the [PyPI Advisory Database](https://github.com/pypa/advisory-database). No API key required. Exits non-zero if vulnerabilities are found (recorded as a failed step, but pipeline continues).
+
+#### Layer 3 — Checkov (IaC misconfigurations)
+
+```yaml
+- name: Checkov — Dockerfile security scan
+  uses: bridgecrewio/checkov-action@master
+  with:
+    directory: app/orchestrator   # targets the Dockerfile
+    framework: dockerfile
+    output_format: sarif
+    output_file_path: checkov.sarif
+    soft_fail: true
+
+- name: Upload Checkov SARIF to GitHub Security
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: checkov.sarif
+    category: checkov
+```
+
+Checkov checks the Dockerfile against 50+ best-practice rules: running as root, using `latest` tags, missing `HEALTHCHECK`, exposing unnecessary ports, etc. `soft_fail: true` means Checkov findings never block the pipeline — they surface as alerts for the team to review.
+
+#### Layer 4 — Trivy (Filesystem vulnerability scan)
+
+```yaml
+- name: Trivy — filesystem and dependency vulnerability scan
+  uses: aquasecurity/trivy-action@master
+  with:
+    scan-type: fs
+    scan-ref: .
+    format: sarif
+    output: trivy.sarif
+    severity: CRITICAL,HIGH
+    exit-code: "0"
+
+- name: Upload Trivy SARIF to GitHub Security
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: trivy.sarif
+    category: trivy
+```
+
+Trivy scans the entire repository filesystem — Python packages, OS packages referenced in the Dockerfile, and IaC files. Only `CRITICAL` and `HIGH` findings are reported. `exit-code: "0"` keeps the step green; results appear in the Security tab.
+
+### Job 4 — `synth` (PR only, needs `test` + `security`)
 
 ```yaml
 synth:
-  needs: test
+  needs: [test, security]
   if: github.event_name == 'pull_request'
-  steps:
-    ...
-    - run: cdk synth
-      working-directory: infra
-      env:
-        CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-        CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+  ...
+  run: cdk synth
 ```
 
 `cdk synth` renders the full CloudFormation template including **building the Docker image**. If the Dockerfile has a syntax error, a missing pip package, or the CDK Python code is broken, this step fails — before anything reaches AWS. It gates all PRs so broken infrastructure code cannot be merged.
 
-### Job 3 — `deploy` (push to main only)
+Note that `synth` now waits for **both** `test` and `security` to pass. A PR with known critical vulnerabilities in dependencies will not be synthable.
+
+### Job 5 — `deploy` (push to main only, needs `test` + `security`)
 
 ```yaml
 deploy:
-  needs: test
+  needs: [test, security]
   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-  steps:
-    ...
-    - uses: docker/setup-buildx-action@v3
-    - run: |
-        cdk deploy --all \
-          --require-approval never \
-          --outputs-file ../cdk-outputs.json
-      working-directory: infra
-      env:
-        CDK_DEFAULT_ACCOUNT: ${{ secrets.AWS_ACCOUNT_ID }}
-        CDK_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+  ...
+  run: |
+    cdk deploy --all \
+      --require-approval never \
+      --outputs-file ../cdk-outputs.json
 ```
 
 `--require-approval never` suppresses the interactive confirmation prompt (required in CI). `--outputs-file` captures stack outputs (like the API Gateway URL) to a JSON file that is then printed to the job summary for easy access.
@@ -521,16 +649,31 @@ git push origin feature/test-pipeline
 
 5. **Watch the checks appear** on the PR:
    - Navigate to the **Checks** tab on the pull request
-   - You should see two jobs running: `Unit Tests` and `CDK Synth (PR validation)`
+   - You should see four jobs: `Unit Tests`, `Copilot Code Review`, `Security Scan`, and `CDK Synth (PR validation)`
+   - `Unit Tests`, `Copilot Code Review`, and `Security Scan` start immediately in parallel
+   - `CDK Synth (PR validation)` starts only after `Unit Tests` AND `Security Scan` finish
 
 6. **Expected outcome:**
 
 ```
-✅ Unit Tests          — pytest passes (tests are vacuously passing currently)
-✅ CDK Synth (PR validation) — CloudFormation template generated successfully
+✅ Unit Tests                  — pytest passes
+✅ Copilot Code Review         — AI review posted as PR comments (see Files Changed tab)
+✅ Security Scan               — all four scanners ran; findings in Security tab
+✅ CDK Synth (PR validation)   — CloudFormation template generated successfully
 ```
 
+7. **View Copilot review comments:**
+   - Click the **Files changed** tab on the pull request
+   - GitHub Copilot's inline comments appear alongside the diff, marked with the Copilot icon
+
+8. **View security findings:**
+   - Go to **Security → Code scanning** (top navigation)
+   - Findings from `bandit`, `checkov`, and `trivy` appear here categorised by severity
+   - Each finding links back to the exact line of code
+
 > **If `CDK Synth` fails:** The most common cause is missing secrets. Check that all three secrets are set correctly in **Settings → Secrets and variables → Actions**.
+>
+> **If `Copilot Code Review` fails with "Resource not accessible by integration":** Copilot code review is not enabled for the repository. Go to **Settings → Copilot → Code review** and enable it.
 
 ---
 
@@ -549,15 +692,21 @@ git push origin feature/test-pipeline
    - Go to your repository → **Actions** tab
    - Click the most recent workflow run (triggered by your merge)
 
-3. **Watch the deploy job progress** — it takes approximately 5–10 minutes because CDK builds the Docker image:
+3. **Watch the jobs progress** — `Unit Tests` and `Security Scan` start in parallel immediately; `Deploy to Dev` starts after both pass. Total time is approximately 8–12 minutes:
 
 ```
-✅ Unit Tests
+✅ Unit Tests               (≈ 1 min)
   └─ Set up Python 3.12
   └─ Install CDK dependencies
   └─ Run unit tests
 
-⏳ Deploy to Dev
+✅ Security Scan            (≈ 2 min, runs in parallel with Unit Tests)
+  └─ Bandit — Python SAST
+  └─ pip-audit — dependency CVE scan
+  └─ Checkov — Dockerfile scan
+  └─ Trivy — filesystem scan
+
+⏳ Deploy to Dev            (starts after both above pass, ≈ 5–10 min)
   └─ Set up Python 3.12
   └─ Install CDK dependencies
   └─ Set up Node.js
@@ -622,7 +771,27 @@ curl "${API_URL}items"
 
 A `200 OK` response (even an empty one) confirms the full stack — API Gateway → Lambda container → response — is working end-to-end.
 
-### Check 5 — Pipeline Run Summary
+### Check 5 — GitHub Security Tab (Code Scanning Alerts)
+
+1. Go to your repository → **Security** tab (top navigation) → **Code scanning**
+2. You should see alerts from three tools: `bandit`, `checkov`, and `trivy`
+3. Each alert shows:
+   - The tool that found it (e.g. `bandit`)
+   - Severity: `Critical`, `High`, `Medium`, or `Low`
+   - The file and line number
+   - A description of the finding and how to fix it
+4. Alerts from `bandit` and `trivy` that were present in a **closed PR** will be automatically marked as fixed once the PR is merged
+
+> **Tip:** If you see zero alerts, the scans either found nothing (good!) or the SARIF files were empty. Check the **Security Scan** job logs in Actions to distinguish between the two.
+
+### Check 6 — Copilot Code Review Comments
+
+1. Open any merged pull request
+2. Click **Files changed**
+3. Copilot's inline comments appear in the diff with the **Copilot icon** (a robot head)
+4. Comments are also visible in the **Conversation** tab under the PR timeline
+
+### Check 7 — Pipeline Run Summary
 
 In GitHub → **Actions** → click the latest run → click **Deploy to Dev** job → scroll to the bottom. Confirm:
 
@@ -634,6 +803,62 @@ In GitHub → **Actions** → click the latest run → click **Deploy to Dev** j
 ---
 
 ## Troubleshooting
+
+### `Copilot Code Review` fails with "Resource not accessible by integration"
+
+**Cause:** GitHub Copilot code review is not enabled for the repository, or the `GITHUB_TOKEN` does not have `pull-requests: write`.
+
+**Fix — Enable Copilot code review:**
+1. Go to **Settings → Copilot → Code review** (repository settings)
+2. Toggle **Enable automatic code review** → On
+3. Re-run the failed workflow
+
+**Fix — Check token permissions:**
+The `code-review` job has a job-level `permissions` block. Confirm it includes:
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+```
+If the job is missing this block, the `GITHUB_TOKEN` defaults to read-only and cannot post review comments.
+
+> **No Copilot subscription?** Remove or comment out the `code-review` job entirely. It has no dependency relationship with any other job so the rest of the pipeline is unaffected.
+
+---
+
+### `Security Scan` job — SARIF upload fails with "Advanced Security must be enabled"
+
+**Cause:** GitHub Advanced Security is not enabled on the repository. Code Scanning (SARIF upload) requires Advanced Security, which is free for public repositories but requires a **GitHub Enterprise** or **GitHub Team** plan for private repositories.
+
+**Fix for private repositories:**
+1. Go to **Settings → Security & analysis**
+2. Enable **GitHub Advanced Security**
+3. Enable **Code scanning**
+4. Re-run the security job
+
+**Workaround (no Advanced Security):** Replace the `github/codeql-action/upload-sarif@v3` steps with plain output:
+```yaml
+- name: Bandit — Python static security analysis
+  run: bandit -r app/ infra/infra/ --exit-zero
+  # outputs findings to stdout only — no Security tab integration
+```
+
+---
+
+### `pip-audit` reports vulnerabilities — should this block the deploy?
+
+**Current behaviour:** `pip-audit` runs with `continue-on-error: true`, so a vulnerable dependency shows the step as failed (orange ⚠) but does not block the pipeline.
+
+**To make it blocking:** Remove `continue-on-error: true` from the pip-audit step. `pip-audit` exits non-zero when vulnerabilities are found, which will cause the `security` job to fail and therefore block `deploy` and `synth`.
+
+**To fix the vulnerability itself:**
+```bash
+# Update the specific package to a patched version
+pip-audit -r app/orchestrator/requirements.txt --fix
+# or manually update the version pin in requirements.txt
+```
+
+---
 
 ### `Error: Not authorized to perform: sts:AssumeRoleWithWebIdentity`
 

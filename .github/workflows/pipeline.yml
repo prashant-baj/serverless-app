@@ -6,10 +6,11 @@ on:
   pull_request:
     branches: [main]
 
-# Required for GitHub OIDC token (keyless AWS auth)
+# Required for GitHub OIDC token (keyless AWS auth) and GitHub Security tab
 permissions:
-  id-token: write
-  contents: read
+  id-token: write       # OIDC → AWS credentials (synth + deploy jobs)
+  contents: read        # checkout
+  security-events: write # upload SARIF results to GitHub Security tab
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -45,12 +46,130 @@ jobs:
         run: pytest tests/ -v
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 2 — SYNTH (PR only — validates CDK templates without deploying)
+  # JOB 2 — COPILOT CODE REVIEW (PR only, runs in parallel with test)
+  #
+  # Posts an automated AI-powered review on the pull request.
+  # Requires: GitHub Copilot subscription with code review enabled on the repo.
+  # Enable in: Repository Settings → Copilot → Code review
+  # ─────────────────────────────────────────────────────────────────────────────
+  code-review:
+    name: Copilot Code Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write  # allows Copilot to post review comments on the PR
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: GitHub Copilot Code Review
+        uses: github/copilot-code-review@v1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 3 — SECURITY SCAN (runs on every PR and push to main, parallel with test)
+  #
+  # Four layers of scanning:
+  #   bandit   — Python SAST (static application security testing)
+  #   pip-audit — dependency CVE check against PyPI Advisory Database
+  #   checkov  — IaC misconfiguration scan (Dockerfile)
+  #   trivy    — filesystem + dependency vulnerability scan
+  #
+  # All findings are uploaded to the GitHub Security tab (Code Scanning Alerts)
+  # as SARIF. Steps use continue-on-error so all scanners always run and the
+  # full picture is available before deciding to block the PR.
+  # ─────────────────────────────────────────────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Python environment for bandit and pip-audit ──────────────────────────
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install security scanners
+        run: pip install bandit pip-audit
+
+      # ── Bandit — Python SAST ─────────────────────────────────────────────────
+      - name: Bandit — Python static security analysis
+        # Scans app/ (Lambda handler) and infra/infra/ (CDK stack definitions).
+        # --exit-zero keeps this step green; severity shows in GitHub Security tab.
+        run: |
+          bandit -r app/ infra/infra/ \
+            -f sarif \
+            -o bandit.sarif \
+            --exit-zero
+        continue-on-error: true
+
+      - name: Upload Bandit SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+      # ── pip-audit — dependency CVE scan ──────────────────────────────────────
+      - name: pip-audit — dependency vulnerability scan
+        # Checks all requirements files against the PyPI Advisory Database.
+        # No API key required. Exits non-zero if vulnerabilities are found.
+        run: |
+          pip-audit \
+            -r app/orchestrator/requirements.txt \
+            -r infra/requirements.txt
+        continue-on-error: true
+
+      # ── Checkov — IaC misconfiguration scan ──────────────────────────────────
+      - name: Checkov — Dockerfile security scan
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: app/orchestrator   # scans the Dockerfile
+          framework: dockerfile
+          output_format: sarif
+          output_file_path: checkov.sarif
+          soft_fail: true               # findings are informational, not blocking
+
+      - name: Upload Checkov SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov.sarif
+          category: checkov
+
+      # ── Trivy — filesystem vulnerability scan ────────────────────────────────
+      - name: Trivy — filesystem and dependency vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"               # findings go to Security tab, not failing build
+
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 4 — SYNTH (PR only — validates CDK templates without deploying)
   # ─────────────────────────────────────────────────────────────────────────────
   synth:
     name: CDK Synth (PR validation)
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, security]
     if: github.event_name == 'pull_request'
 
     steps:
@@ -92,12 +211,12 @@ jobs:
         run: cdk synth
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 3 — DEPLOY (push to main only — builds Docker, pushes to ECR, deploys)
+  # JOB 5 — DEPLOY (push to main only — builds Docker, pushes to ECR, deploys)
   # ─────────────────────────────────────────────────────────────────────────────
   deploy:
     name: Deploy to Dev
     runs-on: ubuntu-latest
-    needs: test
+    needs: [test, security]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
