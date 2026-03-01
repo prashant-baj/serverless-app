@@ -1,4 +1,4 @@
-name: Ultimate DevSecOps Pipeline
+name: Serverless DevSecOps Pipeline
 
 on:
   push:
