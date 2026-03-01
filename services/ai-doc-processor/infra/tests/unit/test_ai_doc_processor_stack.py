@@ -1,5 +1,5 @@
 """
-Unit tests for InfraStack.
+Unit tests for AiDocProcessorStack.
 
 DockerImageFunction is replaced with a lightweight stand-in (inline Python)
 so that the suite runs without a Docker daemon.  All significant resources
@@ -7,7 +7,7 @@ so that the suite runs without a Docker daemon.  All significant resources
 are asserted against the synthesised CloudFormation template.
 
 Run:
-    cd infra
+    cd services/ai-doc-processor/infra
     pytest tests/ -v
 """
 import aws_cdk as core
@@ -16,7 +16,7 @@ import aws_cdk.aws_lambda as _lambda
 import pytest
 from unittest.mock import patch
 
-from infra.infra_stack import InfraStack
+from stack.ai_doc_processor_stack import AiDocProcessorStack
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -55,14 +55,14 @@ class _FakeDockerImageFunction(_lambda.Function):
 
 @pytest.fixture(scope="module")
 def template() -> assertions.Template:
-    """Synthesise InfraStack once and share the template across all tests.
+    """Synthesise AiDocProcessorStack once and share the template across all tests.
 
     Module scope means the CDK synthesis step runs only once for the entire
     file, keeping the suite fast even as more tests are added.
     """
     app = core.App(context={"env_name": "test"})
-    with patch("infra.infra_stack._lambda.DockerImageFunction", _FakeDockerImageFunction):
-        stack = InfraStack(app, "TestStack", env=TEST_ENV)
+    with patch("stack.ai_doc_processor_stack._lambda.DockerImageFunction", _FakeDockerImageFunction):
+        stack = AiDocProcessorStack(app, "TestStack", env=TEST_ENV)
     return assertions.Template.from_stack(stack)
 
 

@@ -1,5 +1,4 @@
 from aws_cdk import (
-    Stack,
     aws_lambda as _lambda,
     aws_s3 as s3,
     aws_s3_notifications as s3n,
@@ -9,26 +8,26 @@ from aws_cdk import (
     aws_iam as iam,
     RemovalPolicy,
     Duration,
-    
 )
 from constructs import Construct
+from constructs_lib.base_lambda_stack import BaseServiceStack
 
-class InfraStack(Stack):
+
+class AiDocProcessorStack(BaseServiceStack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
-        super().__init__(scope, construct_id, **kwargs)
+        super().__init__(scope, construct_id, service_name="ai-doc-processor", **kwargs)
 
         account = self.node.try_get_context("account") or self.account
         region = self.node.try_get_context("region") or self.region
-        env_name = self.node.try_get_context("env_name") or "dev"
 
-        print(f"Account: {account}, Region: {region}, Env Name: {env_name}")
+        print(f"Account: {account}, Region: {region}, Env Name: {self.env_name}")
         
          # Create ECR repo
         imagerepo = ecr.Repository(
             self,
             "AIDocProcessorImageRepo",
-            repository_name=f"ai-doc-processor-repo-{env_name}"
+            repository_name=f"ai-doc-processor-repo-{self.env_name}"
         )
         
         
@@ -46,7 +45,7 @@ class InfraStack(Stack):
         # )
         # Lambda Function
         
-        orchestrator_lambda_name = f"OrchestratorContainer-{env_name}"
+        orchestrator_lambda_name = f"OrchestratorContainer-{self.env_name}"
        
         orchestrator_lambda = _lambda.DockerImageFunction(
             self,
