@@ -4,7 +4,7 @@ import boto3
 
 
 def lambda_handler(event, context):
-    """Invoice notification handler.
+    """Invoice notification handler lambda.
 
     Receives an invoice payload via API Gateway POST /notify and
     publishes a notification (stub implementation).
