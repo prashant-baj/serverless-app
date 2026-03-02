@@ -2,6 +2,7 @@ from aws_cdk import (
     aws_lambda as _lambda,
     aws_apigateway as apigw,
     aws_iam as iam,
+    aws_s3 as s3,
     CfnOutput,
     Duration,
 )
@@ -16,6 +17,15 @@ class InvoiceNotifierStack(BaseServiceStack):
 
         account = self.node.try_get_context("account") or self.account
         region = self.node.try_get_context("region") or self.region
+
+        # S3 bucket to store processed invoices
+        processed_bucket = s3.Bucket(
+            self,
+            "ProcessedInvoiceBucket",
+            bucket_name="processedinvoice",
+            removal_policy=self.removal_policy,
+            auto_delete_objects=True,
+        )
 
         notifier_fn = _lambda.DockerImageFunction(
             self,
