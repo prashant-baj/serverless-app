@@ -5,6 +5,7 @@ from aws_cdk import (
     aws_s3 as s3,
     CfnOutput,
     Duration,
+    RemovalPolicy,
 )
 from constructs import Construct
 from constructs_lib.base_lambda_stack import BaseServiceStack
@@ -23,7 +24,7 @@ class InvoiceNotifierStack(BaseServiceStack):
             self,
             "ProcessedInvoiceBucket",
             bucket_name="processedinvoice",
-            removal_policy=self.removal_policy,
+            removal_policy=RemovalPolicy.DESTROY,  # safe cleanup for dev
             auto_delete_objects=True,
         )
 
