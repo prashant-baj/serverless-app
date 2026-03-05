@@ -13,6 +13,7 @@ delivering it to the subscription destination. This function:
   4. Enriches each document with CloudWatch metadata (log group, stream, timestamp).
   5. Bulk-indexes the documents into Amazon OpenSearch Service.
 
+
 Environment variables
 ---------------------
 OPENSEARCH_ENDPOINT  : OpenSearch domain endpoint (no scheme, no trailing slash)
