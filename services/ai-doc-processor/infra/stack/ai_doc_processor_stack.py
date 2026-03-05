@@ -11,7 +11,7 @@ from aws_cdk import (
     Duration,
     # ── Observability additions ────────────────────────────────────────────
     aws_logs as logs,
-    aws_logs_destinations as logs_destinations,
+    # aws_logs_destinations not used — CfnSubscriptionFilter avoids Fn::ImportValue
     aws_cloudwatch as cloudwatch,
 )
 from constructs import Construct
@@ -127,31 +127,23 @@ class AiDocProcessorStack(BaseServiceStack):
         # OBSERVABILITY — wires this service into the shared LogForwarderStack
         # ══════════════════════════════════════════════════════════════════
 
-        # ── 1. Explicit CloudWatch Log Group (with retention) ──────────────
-        log_group = logs.LogGroup(
-            self,
-            "OrchestratorLogGroup",
-            log_group_name=f"/aws/lambda/{orchestrator_lambda_name}",
-            retention=logs.RetentionDays.ONE_MONTH,
-            removal_policy=RemovalPolicy.DESTROY,
-        )
+        # ── 1. Use the CDK-managed log group ──────────────────────────────────
+        # cdk.json has useCdkManagedLogGroup:true, so CDK already creates a
+        # LogGroup for this Lambda.  Do NOT create a second one — duplicate
+        # LogGroupName in the same template causes ChangeSet validation to fail.
+        log_group = orchestrator_lambda.log_group
 
-        # ── 2. Import the shared Log Forwarder Lambda (cross-stack) ────────
-        # LogForwarderStack (common_services/log-forwarder) exports this ARN
-        # as a named CloudFormation export.  Deploy LogForwarderStack first.
-        log_forwarder_fn = _lambda.Function.from_function_arn(
-            self,
-            "ImportedLogForwarder",
-            function_arn=cdk.Fn.import_value(f"LogForwarderArn-{self.env_name}"),
-        )
-
-        # ── 3a. Grant CloudWatch Logs permission to invoke the imported Lambda ─
-        # from_function_arn() returns an IFunction whose addPermission() is a
-        # no-op, so LambdaDestination cannot add the policy automatically.
-        # We must create the resource-based policy explicitly.
-        # Use the function NAME (not Fn::ImportValue ARN) so CloudFormation's
-        # EarlyValidation ResourceExistenceCheck can resolve it at ChangeSet time.
+        # ── 2. Construct the log-forwarder ARN directly ────────────────────
+        # Using Fn::ImportValue("LogForwarderArn-dev") as DestinationArn in
+        # AWS::Logs::SubscriptionFilter triggers EarlyValidation::ResourceExistenceCheck
+        # failures at ChangeSet creation time.  Build the ARN from known values
+        # (region/account/env_name) to give CloudFormation a plain resolvable string.
         log_forwarder_fn_name = f"LogForwarder-{self.env_name}"
+        log_forwarder_arn = (
+            f"arn:aws:lambda:{region}:{account}:function:{log_forwarder_fn_name}"
+        )
+
+        # ── 3a. Grant CloudWatch Logs permission to invoke the log-forwarder ─
         cfn_invoke_permission = _lambda.CfnPermission(
             self,
             "CloudWatchLogsInvokeLogForwarder",
@@ -163,20 +155,15 @@ class AiDocProcessorStack(BaseServiceStack):
         )
 
         # ── 3b. Subscription Filter → shared Log Forwarder Lambda ──────────
-        # Every log line written by the orchestrator is forwarded to the
-        # Log Forwarder Lambda in near-real time (< 15 s typical latency).
-        subscription = logs.SubscriptionFilter(
+        # CfnSubscriptionFilter with a plain destination_arn avoids Fn::ImportValue.
+        cfn_subscription = logs.CfnSubscriptionFilter(
             self,
             "OrchestratorLogSubscription",
-            log_group=log_group,
-            destination=logs_destinations.LambdaDestination(
-                log_forwarder_fn, add_permissions=False
-            ),
-            filter_pattern=logs.FilterPattern.all_events(),
+            log_group_name=log_group.log_group_name,
+            destination_arn=log_forwarder_arn,
+            filter_pattern="",
         )
-        # CloudFormation has no implicit dependency between the two resources;
-        # force it to create the permission before the subscription filter.
-        subscription.node.default_child.add_depends_on(cfn_invoke_permission)
+        cfn_subscription.add_depends_on(cfn_invoke_permission)
 
         # ── 4. CloudWatch Alarms ───────────────────────────────────────────
         error_alarm = cloudwatch.Alarm(
