@@ -81,7 +81,6 @@ class LogForwarderStack(BaseServiceStack):
         super().__init__(scope, construct_id, service_name="log-forwarder", **kwargs)
 
         account = self.node.try_get_context("account") or self.account
-        region  = self.node.try_get_context("region")  or self.region
 
         # ── Amazon OpenSearch Service domain ──────────────────────────────
         # t3.small.search + 20 GB EBS is cost-efficient for a dev environment.
@@ -151,7 +150,8 @@ class LogForwarderStack(BaseServiceStack):
             environment={
                 "OPENSEARCH_ENDPOINT": domain.domain_endpoint,
                 "INDEX_NAME": "lambda-logs",
-                "AWS_REGION": region,
+                # AWS_REGION is injected automatically by the Lambda runtime —
+                # setting it manually is rejected by CDK/Lambda as a reserved var.
             },
         )
 

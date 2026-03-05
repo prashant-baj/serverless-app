@@ -19,7 +19,8 @@ Environment variables
 OPENSEARCH_ENDPOINT  : OpenSearch domain endpoint (no scheme, no trailing slash)
                        e.g. "search-ai-doc-logs-dev-xxx.ap-southeast-2.es.amazonaws.com"
 INDEX_NAME           : OpenSearch index to write into   (default: "lambda-logs")
-AWS_REGION           : AWS region                        (default: "ap-southeast-2")
+AWS_REGION           : Injected automatically by the Lambda runtime — do NOT set
+                       this manually (CDK/Lambda treats it as a reserved variable).
 """
 
 
