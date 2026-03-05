@@ -16,6 +16,7 @@ named export so any stack in the same account/region can reference it:
     Fn.import_value(f"OpenSearchEndpoint-{env_name}")
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -27,6 +28,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_lambda as _lambda,
     aws_opensearchservice as opensearch,
+    aws_secretsmanager as secretsmanager,
     CfnOutput,
     Duration,
     RemovalPolicy,
@@ -80,11 +82,35 @@ class LogForwarderStack(BaseServiceStack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, service_name="log-forwarder", **kwargs)
 
-        account = self.node.try_get_context("account") or self.account
+        # ── Master-user secret ────────────────────────────────────────────
+        # A random 16-char password is generated at deploy time and stored in
+        # Secrets Manager.  Retrieve it after deployment with:
+        #
+        #   aws secretsmanager get-secret-value \
+        #     --secret-id /opensearch/common-logs-<env>/master-user \
+        #     --query SecretString --output text
+        #
+        master_user_secret = secretsmanager.Secret(
+            self,
+            "OpenSearchMasterUserSecret",
+            secret_name=f"/opensearch/common-logs-{self.env_name}/master-user",
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                secret_string_template=json.dumps({"username": "admin"}),
+                generate_string_key="password",
+                exclude_characters=' %+~`#$&*()|[]{}:;<>?!\'/@"\\',
+                password_length=16,
+            ),
+            removal_policy=RemovalPolicy.DESTROY,
+        )
 
         # ── Amazon OpenSearch Service domain ──────────────────────────────
         # t3.small.search + 20 GB EBS is cost-efficient for a dev environment.
-        # For production: upgrade to m6g.large.search + Multi-AZ + FGAC.
+        # For production: upgrade to m6g.large.search + Multi-AZ.
+        #
+        # Fine-Grained Access Control (FGAC) is enabled so Dashboards shows a
+        # native login screen instead of requiring IAM-signed requests from the
+        # browser.  The domain-level access policy is opened to * — FGAC's
+        # index/document-level permissions handle the actual authorisation.
         domain = opensearch.Domain(
             self,
             "ObservabilityDomain",
@@ -102,15 +128,20 @@ class LogForwarderStack(BaseServiceStack):
             encryption_at_rest=opensearch.EncryptionAtRestOptions(enabled=True),
             node_to_node_encryption=True,
             enforce_https=True,
+            # FGAC requires all three security options above to be enabled.
+            fine_grained_access_control=opensearch.AdvancedSecurityOptions(
+                master_user_name="admin",
+                master_user_password=master_user_secret.secret_value_from_json("password"),
+            ),
             removal_policy=RemovalPolicy.DESTROY,
         )
 
-        # Allow all IAM principals in this account to access the domain.
-        # In production, restrict this with fine-grained access control (FGAC)
-        # and a Kibana master user bound to an SSO/SAML identity provider.
+        # Open domain-level access policy — FGAC handles fine-grained authz.
+        # Without this, the domain would require every request to carry IAM
+        # credentials, which browsers cannot provide.
         domain.add_access_policies(
             iam.PolicyStatement(
-                principals=[iam.AccountPrincipal(account)],
+                principals=[iam.AnyPrincipal()],
                 actions=["es:*"],
                 resources=[f"{domain.domain_arn}/*"],
             )
@@ -177,7 +208,19 @@ class LogForwarderStack(BaseServiceStack):
             "OpenSearchDashboardUrl",
             value=f"https://{domain.domain_endpoint}/_dashboards",
             export_name=f"OpenSearchDashboardUrl-{self.env_name}",
-            description="OpenSearch Dashboards URL — sign in with AWS IAM credentials",
+            description="OpenSearch Dashboards URL — sign in with username 'admin' and the password from the master-user secret",
+        )
+
+        CfnOutput(
+            self,
+            "OpenSearchMasterUserSecretArn",
+            value=master_user_secret.secret_arn,
+            description=(
+                "Retrieve Dashboards admin password: "
+                "aws secretsmanager get-secret-value "
+                f"--secret-id /opensearch/common-logs-{self.env_name}/master-user "
+                "--query SecretString --output text"
+            ),
         )
 
         CfnOutput(
