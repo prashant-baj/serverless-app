@@ -104,20 +104,21 @@ Kibana                              OpenSearch Dashboards
 
 ## Table of Contents
 
-1. [What This Lab Covers](#what-this-lab-covers)
-2. [Architecture](#architecture)
-3. [How the Observability Stack Works](#how-the-observability-stack-works)
-4. [Prerequisites](#prerequisites)
-5. [Part 1 — Structured Logging with AWS Lambda Powertools](#part-1--structured-logging-with-aws-lambda-powertools)
-6. [Part 2 — Log Forwarder Lambda (common_services)](#part-2--log-forwarder-lambda-common_services)
-7. [Part 3 — CDK Infrastructure Changes](#part-3--cdk-infrastructure-changes)
+1. [How This Demo Maps to the ELK Stack](#how-this-demo-maps-to-the-elk-stack)
+2. [What This Lab Covers](#what-this-lab-covers)
+3. [Architecture](#architecture)
+4. [How the Observability Stack Works](#how-the-observability-stack-works)
+5. [Prerequisites](#prerequisites)
+6. [Part 1 — Structured Logging with AWS Lambda Powertools](#part-1--structured-logging-with-aws-lambda-powertools)
+7. [Part 2 — Log Forwarder Lambda (common_services)](#part-2--log-forwarder-lambda-common_services)
+8. [Part 3 — CDK Infrastructure Changes](#part-3--cdk-infrastructure-changes)
    - [3a — LogForwarderStack (common_services)](#part-3a--logforwarderstack-common_services)
    - [3b — AiDocProcessorStack (services)](#part-3b--aidocprocessorstack-services)
-8. [Part 4 — CDK Deployment Steps](#part-4--cdk-deployment-steps)
-9. [Part 5 — OpenSearch Dashboards](#part-5--opensearch-dashboards)
-10. [Verify & Validate](#verify--validate)
-11. [Troubleshooting](#troubleshooting)
-12. [Production Considerations](#production-considerations)
+9. [Part 4 — CDK Deployment Steps](#part-4--cdk-deployment-steps)
+10. [Part 5 — OpenSearch Dashboards](#part-5--opensearch-dashboards)
+11. [Verify & Validate](#verify--validate)
+12. [Troubleshooting](#troubleshooting)
+13. [Production Considerations](#production-considerations)
 
 ---
 
